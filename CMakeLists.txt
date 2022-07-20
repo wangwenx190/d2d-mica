@@ -27,6 +27,10 @@ target_sources(${PROJECT_NAME} PRIVATE
     app.rc app.manifest resource.h main.cpp
 )
 
+target_link_libraries(${PROJECT_NAME} PRIVATE
+    winmm uxtheme dwmapi d2d1 d3d11 dxgi dxguid
+)
+
 set(_WIN32_WINNT_WIN10 0x0A00)
 set(NTDDI_WIN10_CO 0x0A00000B)
 target_compile_definitions(${PROJECT_NAME} PRIVATE

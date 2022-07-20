@@ -30,6 +30,8 @@
 #include <d2d1_2.h>
 #include <d2d1effects_2.h>
 #include <wincodec.h>
+#include <mmsystem.h>
+#include <uxtheme.h>
 #include <clocale>
 #include <iostream>
 #include "resource.h"
@@ -44,8 +46,9 @@ static constexpr const D2D1_COLOR_F sc_darkThemeColor = { 0.125f, 0.125f, 0.125f
 static constexpr const float sc_darkThemeTintOpacity = 0.8f;
 static constexpr const D2D1_COLOR_F sc_lightThemeColor = { 0.953f, 0.953f, 0.953f, 1.0f };
 static constexpr const float sc_lightThemeTintOpacity = 0.5f;
+static constexpr const float sc_luminosityOpacity = 1.0f;
 
-static constexpr const wchar_t WINDOW_CLASS_NAME[] = L"org.wangwenx190.d2dmica.windowclass\0";
+static constexpr const wchar_t WINDOW_CLASS_NAME[] = L"org.wangwenx190.D2DMica.WindowClass\0";
 static constexpr const wchar_t WINDOW_TITLE[] = L"Direct2D Mica Material\0";
 
 static HINSTANCE g_hInstance = nullptr;
@@ -64,8 +67,9 @@ static Microsoft::WRL::ComPtr<ID2D1Effect> g_D2DWallpaperBitmapSourceEffect = nu
 static Microsoft::WRL::ComPtr<ID2D1Effect> g_D2DNoiseBitmapSourceEffect = nullptr;
 
 static Microsoft::WRL::ComPtr<ID2D1Effect> g_D2DTintColorEffect = nullptr;
-static Microsoft::WRL::ComPtr<ID2D1Effect> g_D2DFallbackColorEffect = nullptr;
+static Microsoft::WRL::ComPtr<ID2D1Effect> g_D2DTintOpacityEffect = nullptr;
 static Microsoft::WRL::ComPtr<ID2D1Effect> g_D2DLuminosityColorEffect = nullptr;
+static Microsoft::WRL::ComPtr<ID2D1Effect> g_D2DLuminosityOpacityEffect = nullptr;
 static Microsoft::WRL::ComPtr<ID2D1Effect> g_D2DLuminosityBlendEffect = nullptr;
 static Microsoft::WRL::ComPtr<ID2D1Effect> g_D2DLuminosityColorBlendEffect = nullptr;
 static Microsoft::WRL::ComPtr<ID2D1Effect> g_D2DGaussianBlurEffect = nullptr;
@@ -74,7 +78,6 @@ static Microsoft::WRL::ComPtr<ID2D1Effect> g_D2DNoiseBorderEffect = nullptr;
 static Microsoft::WRL::ComPtr<ID2D1Effect> g_D2DNoiseOpacityEffect = nullptr;
 static Microsoft::WRL::ComPtr<ID2D1Effect> g_D2DNoiseBlendEffectOuter = nullptr;
 
-static Microsoft::WRL::ComPtr<ID2D1Effect> g_D2DFadeInOutEffect = nullptr;
 static Microsoft::WRL::ComPtr<ID2D1Effect> g_D2DFinalBrushEffect = nullptr;
 
 static Microsoft::WRL::ComPtr<IWICImagingFactory2> g_WICFactory = nullptr;
@@ -113,14 +116,28 @@ static D3D_FEATURE_LEVEL g_D3DFeatureLevel = D3D_FEATURE_LEVEL_1_0_CORE;
 
 [[nodiscard]] static inline bool ShouldAppsUseDarkMode()
 {
-    return false;
+    HKEY key = nullptr;
+    RegOpenKeyExW(HKEY_CURRENT_USER, LR"(Software\Microsoft\Windows\CurrentVersion\Themes\Personalize)", 0, KEY_READ, &key);
+    DWORD value = 0;
+    DWORD size = sizeof(value);
+    RegQueryValueExW(key, L"AppsUseLightTheme", nullptr, nullptr, reinterpret_cast<LPBYTE>(&value), &size);
+    RegCloseKey(key);
+    return (value == 0);
+}
+
+static inline void UpdateWindowFrame(const HWND hWnd)
+{
+    const BOOL dark = g_darkModeEnabled ? TRUE : FALSE;
+    DwmSetWindowAttribute(hWnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+    SetWindowTheme(hWnd, (g_darkModeEnabled ? L"DarkMode_Explorer" : L"Explorer"), nullptr);
 }
 
 static inline void UpdateBrushAppearance()
 {
-    g_D2DLuminosityColorEffect->SetValue(D2D1_FLOOD_PROP_COLOR, WINRTCOLOR_TO_D2DCOLOR4F(q_ptr->GetEffectiveLuminosityColor()));
-    g_D2DTintColorEffect->SetValue(D2D1_FLOOD_PROP_COLOR, WINRTCOLOR_TO_D2DCOLOR4F(q_ptr->GetEffectiveTintColor()));
-    g_D2DFallbackColorEffect->SetValue(D2D1_FLOOD_PROP_COLOR, WINRTCOLOR_TO_D2DCOLOR4F(q_ptr->GetFallbackColor()));
+    g_D2DTintColorEffect->SetValue(D2D1_FLOOD_PROP_COLOR, (g_darkModeEnabled ? sc_darkThemeColor : sc_lightThemeColor));
+    g_D2DTintOpacityEffect->SetValue(D2D1_OPACITY_PROP_OPACITY, (g_darkModeEnabled ? sc_darkThemeTintOpacity : sc_lightThemeTintOpacity));
+    g_D2DLuminosityColorEffect->SetValue(D2D1_FLOOD_PROP_COLOR, (g_darkModeEnabled ? sc_darkThemeColor : sc_lightThemeColor));
+    g_D2DLuminosityOpacityEffect->SetValue(D2D1_OPACITY_PROP_OPACITY, sc_luminosityOpacity);
 }
 
 [[nodiscard]] static inline LRESULT CALLBACK WndProc
@@ -128,9 +145,22 @@ static inline void UpdateBrushAppearance()
 {
     switch (uMsg) {
     case WM_PAINT: {
+        const int captionHeight = GetSystemMetricsForDpi(SM_CYCAPTION, g_dpi);
+        const int sizeFrameHeight = GetSystemMetricsForDpi(SM_CYSIZEFRAME, g_dpi);
+        const int sizeFrameWidth = GetSystemMetricsForDpi(SM_CXSIZEFRAME, g_dpi);
+        const int paddedBorderWidth = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, g_dpi);
+        const int resizeBorderWidth = sizeFrameWidth + paddedBorderWidth;
+        const int resizeBorderHeight = sizeFrameHeight + paddedBorderWidth;
+        const int titleBarHeight = captionHeight + resizeBorderHeight;
+        RECT windowRect = {};
+        GetWindowRect(hWnd, &windowRect);
+        const D2D1_RECT_F rect = {
+            float(windowRect.left + resizeBorderWidth), float(windowRect.top + titleBarHeight),
+            float(windowRect.right - resizeBorderWidth), float(windowRect.bottom - resizeBorderHeight)
+        };
         g_D2DContext->BeginDraw();
-        //g_D2DContext->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f)); // todo: check: fully transparent color.
-        g_D2DContext->DrawImage(g_D2DFinalBrushEffect.Get());
+        //g_D2DContext->Clear(g_darkModeEnabled ? D2D1_COLOR_F{0.0f, 0.0f, 0.0f, 1.0f} : D2D1_COLOR_F{1.0f, 1.0f, 1.0f, 1.0f});
+        g_D2DContext->DrawImage(g_D2DFinalBrushEffect.Get(), nullptr, &rect, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
         g_D2DContext->EndDraw();
         DXGI_PRESENT_PARAMETERS params;
         SecureZeroMemory(&params, sizeof(params));
@@ -143,17 +173,75 @@ static inline void UpdateBrushAppearance()
     case WM_SETTINGCHANGE: {
         if ((wParam == 0) && (lParam != 0) // lParam sometimes may be NULL.
             && (std::wcscmp(reinterpret_cast<LPCWSTR>(lParam), L"ImmersiveColorSet") == 0)) {
-            UpdateBrushAppearance();
+            const bool dark = ShouldAppsUseDarkMode();
+            if (g_darkModeEnabled != dark) {
+                g_darkModeEnabled = dark;
+                UpdateBrushAppearance();
+                UpdateWindowFrame(hWnd);
+            }
         }
         if (wParam == SPI_SETDESKWALLPAPER) {
         }
     } break;
     case WM_DPICHANGED: {
-        g_dpi = LOWORD(wParam);
-        const auto rect = reinterpret_cast<LPRECT>(lParam);
-        SetWindowPos(hWnd, nullptr, rect->left, rect->top, rect->right - rect->left,
-            rect->bottom - rect->top, SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER);
-        return 0;
+        const UINT dpiX = LOWORD(wParam);
+        const UINT dpiY = HIWORD(wParam);
+        if (g_dpi != dpiX) {
+            g_dpi = dpiX;
+            const auto rect = reinterpret_cast<LPRECT>(lParam);
+            SetWindowPos(hWnd, nullptr, rect->left, rect->top, rect->right - rect->left,
+                rect->bottom - rect->top, SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+            return 0;
+        }
+    } break;
+    case WM_NCCALCSIZE: {
+        DefWindowProcW(hWnd, WM_NCCALCSIZE, wParam, lParam);
+        // Dirty hack to workaround the resize flicker caused by DWM.
+        LARGE_INTEGER freq = {};
+        QueryPerformanceFrequency(&freq);
+        TIMECAPS tc = {};
+        timeGetDevCaps(&tc, sizeof(tc));
+        const UINT ms_granularity = tc.wPeriodMin;
+        timeBeginPeriod(ms_granularity);
+        LARGE_INTEGER now0 = {};
+        QueryPerformanceCounter(&now0);
+        // ask DWM where the vertical blank falls
+        DWM_TIMING_INFO dti;
+        SecureZeroMemory(&dti, sizeof(dti));
+        dti.cbSize = sizeof(dti);
+        DwmGetCompositionTimingInfo(nullptr, &dti);
+        LARGE_INTEGER now1 = {};
+        QueryPerformanceCounter(&now1);
+        // - DWM told us about SOME vertical blank
+        //   - past or future, possibly many frames away
+        // - convert that into the NEXT vertical blank
+        const LONGLONG period = dti.qpcRefreshPeriod;
+        const LONGLONG dt = dti.qpcVBlank - now1.QuadPart;
+        LONGLONG w = 0, m = 0;
+        if (dt >= 0) {
+            w = dt / period;
+        } else {
+            // reach back to previous period
+            // - so m represents consistent position within phase
+            w = -1 + dt / period;
+        }
+        m = dt - (period * w);
+        const double m_ms = (double(1000) * double(m) / double(freq.QuadPart));
+        Sleep(DWORD(std::round(m_ms)));
+        timeEndPeriod(ms_granularity);
+        return WVR_REDRAW;
+    }
+    case WM_WINDOWPOSCHANGING: {
+        // Tell Windows to discard the entire contents of the client area, as re-using
+        // parts of the client area would lead to jitter during resize.
+        const auto windowPos = reinterpret_cast<LPWINDOWPOS>(lParam);
+        windowPos->flags |= SWP_NOCOPYBITS;
+    } break;
+    case WM_WINDOWPOSCHANGED: {
+        RedrawWindow(hWnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOCHILDREN);
+    } break;
+    case WM_ERASEBKGND: {
+        return 1;
     }
     case WM_CLOSE: {
         DestroyWindow(hWnd);
@@ -181,6 +269,7 @@ EXTERN_C int WINAPI wWinMain
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 
+    g_darkModeEnabled = ShouldAppsUseDarkMode();
     g_wallpaperFilePath = GetWallpaperFilePath();
 
     WNDCLASSEXW wcex;
@@ -188,6 +277,7 @@ EXTERN_C int WINAPI wWinMain
     wcex.cbSize = sizeof(wcex);
     wcex.lpfnWndProc = WndProc;
     wcex.hInstance = g_hInstance;
+    wcex.hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_ICON1));
     wcex.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wcex.lpszClassName = WINDOW_CLASS_NAME;
     RegisterClassExW(&wcex);
@@ -197,6 +287,8 @@ EXTERN_C int WINAPI wWinMain
         CW_USEDEFAULT, CW_USEDEFAULT, nullptr, nullptr, g_hInstance, nullptr);
 
     g_dpi = GetDpiForWindow(g_hWnd);
+
+    UpdateWindowFrame(g_hWnd);
 
     D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_PPV_ARGS(g_D2DFactory.GetAddressOf()));
     // This array defines the set of DirectX hardware feature levels this app supports.
@@ -216,6 +308,8 @@ EXTERN_C int WINAPI wWinMain
     g_D2DFactory->CreateDevice(g_DXGIDevice.Get(), g_D2DDevice.GetAddressOf());
     g_D2DDevice->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, g_D2DContext.GetAddressOf());
     SecureZeroMemory(&g_DXGISwapChainDesc, sizeof(g_DXGISwapChainDesc));
+    g_DXGISwapChainDesc.Width = GetSystemMetricsForDpi(SM_CXSCREEN, g_dpi);
+    g_DXGISwapChainDesc.Height = GetSystemMetricsForDpi(SM_CYSCREEN, g_dpi);
     g_DXGISwapChainDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     g_DXGISwapChainDesc.SampleDesc.Count = 1;
     g_DXGISwapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
@@ -229,11 +323,10 @@ EXTERN_C int WINAPI wWinMain
     g_DXGIDevice->SetMaximumFrameLatency(1);
     g_DXGISwapChain->GetBuffer(0, IID_PPV_ARGS(g_D3D11Texture.GetAddressOf()));
     SecureZeroMemory(&g_D2DBitmapProperties, sizeof(g_D2DBitmapProperties));
-    const auto dpiF = float(g_dpi);
     g_D2DBitmapProperties = D2D1::BitmapProperties1(
         D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
         D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
-        dpiF, dpiF);
+        float(g_dpi), float(g_dpi));
     g_DXGISwapChain->GetBuffer(0, IID_PPV_ARGS(g_DXGISurface.GetAddressOf()));
     g_D2DContext->CreateBitmapFromDxgiSurface(g_DXGISurface.Get(),
         &g_D2DBitmapProperties, g_D2DTargetBitmap.GetAddressOf());
@@ -268,6 +361,8 @@ EXTERN_C int WINAPI wWinMain
     g_D2DNoiseBitmapSourceEffect->SetValue(D2D1_BITMAPSOURCE_PROP_WIC_BITMAP_SOURCE, g_WICNoiseConverter.Get());
 
     g_D2DContext->CreateEffect(CLSID_D2D1Flood, g_D2DTintColorEffect.GetAddressOf());
+    g_D2DContext->CreateEffect(CLSID_D2D1Opacity, g_D2DTintOpacityEffect.GetAddressOf());
+    g_D2DTintOpacityEffect->SetInputEffect(0, g_D2DTintColorEffect.Get());
     g_D2DContext->CreateEffect(CLSID_D2D1GaussianBlur, g_D2DGaussianBlurEffect.GetAddressOf());
     g_D2DGaussianBlurEffect->SetValue(D2D1_GAUSSIANBLUR_PROP_BORDER_MODE, D2D1_BORDER_MODE_HARD);
     g_D2DGaussianBlurEffect->SetValue(D2D1_GAUSSIANBLUR_PROP_OPTIMIZATION, D2D1_DIRECTIONALBLUR_OPTIMIZATION_QUALITY);
@@ -277,12 +372,14 @@ EXTERN_C int WINAPI wWinMain
 
     // Luminosity Color
     g_D2DContext->CreateEffect(CLSID_D2D1Flood, g_D2DLuminosityColorEffect.GetAddressOf());
+    g_D2DContext->CreateEffect(CLSID_D2D1Opacity, g_D2DLuminosityOpacityEffect.GetAddressOf());
+    g_D2DLuminosityOpacityEffect->SetInputEffect(0, g_D2DLuminosityColorEffect.Get());
 
     // Luminosity blend
     g_D2DContext->CreateEffect(CLSID_D2D1Blend, g_D2DLuminosityBlendEffect.GetAddressOf());
     g_D2DLuminosityBlendEffect->SetValue(D2D1_BLEND_PROP_MODE, D2D1_BLEND_MODE_LUMINOSITY);
     g_D2DLuminosityBlendEffect->SetInputEffect(0, g_D2DGaussianBlurEffect.Get());
-    g_D2DLuminosityBlendEffect->SetInputEffect(1, g_D2DLuminosityColorEffect.Get());
+    g_D2DLuminosityBlendEffect->SetInputEffect(1, g_D2DLuminosityOpacityEffect.Get());
 
     // Apply tint:
 
@@ -290,7 +387,7 @@ EXTERN_C int WINAPI wWinMain
     g_D2DContext->CreateEffect(CLSID_D2D1Blend, g_D2DLuminosityColorBlendEffect.GetAddressOf());
     g_D2DLuminosityColorBlendEffect->SetValue(D2D1_BLEND_PROP_MODE, D2D1_BLEND_MODE_COLOR);
     g_D2DLuminosityColorBlendEffect->SetInputEffect(0, g_D2DLuminosityBlendEffect.Get());
-    g_D2DLuminosityColorBlendEffect->SetInputEffect(1, g_D2DTintColorEffect.Get());
+    g_D2DLuminosityColorBlendEffect->SetInputEffect(1, g_D2DTintOpacityEffect.Get());
 
     // Create noise with alpha and wrap:
     // Noise image BorderEffect (infinitely tiles noise image)
@@ -308,21 +405,12 @@ EXTERN_C int WINAPI wWinMain
     g_D2DNoiseBlendEffectOuter->SetInputEffect(0, g_D2DLuminosityColorBlendEffect.Get());
     g_D2DNoiseBlendEffectOuter->SetInputEffect(1, g_D2DNoiseOpacityEffect.Get());
 
-    // Fallback color
-    g_D2DContext->CreateEffect(CLSID_D2D1Flood, g_D2DFallbackColorEffect.GetAddressOf());
-
-    // CrossFade with the fallback color. Weight = 0 means full fallback, 1 means full acrylic.
-    g_D2DContext->CreateEffect(CLSID_D2D1CrossFade, g_D2DFadeInOutEffect.GetAddressOf());
-    g_D2DFadeInOutEffect->SetValue(D2D1_CROSSFADE_PROP_WEIGHT, 1.0f);
-    g_D2DFadeInOutEffect->SetInputEffect(0, g_D2DFallbackColorEffect.Get());
-    g_D2DFadeInOutEffect->SetInputEffect(1, g_D2DNoiseBlendEffectOuter.Get());
-
     //
     g_D2DGaussianBlurEffect->SetValue(D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, sc_blurRadius);
     g_D2DNoiseOpacityEffect->SetValue(D2D1_OPACITY_PROP_OPACITY, sc_noiseOpacity);
     UpdateBrushAppearance();
 
-    g_D2DFinalBrushEffect = g_D2DFadeInOutEffect;
+    g_D2DFinalBrushEffect = g_D2DNoiseBlendEffectOuter;
 
     ShowWindow(g_hWnd, nShowCmd);
     UpdateWindow(g_hWnd);

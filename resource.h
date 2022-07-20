@@ -24,6 +24,10 @@
 
 #pragma once
 
+#ifndef IDI_ICON1
+#  define IDI_ICON1 107
+#endif
+
 #ifndef IDB_NOISE_BITMAP
 #  define IDB_NOISE_BITMAP 117
 #endif
