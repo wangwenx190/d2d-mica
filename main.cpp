@@ -33,6 +33,7 @@
 #include <mmsystem.h>
 #include <uxtheme.h>
 #include <clocale>
+#include <string>
 #include <iostream>
 #include "resource.h"
 
@@ -47,6 +48,7 @@ static constexpr const float sc_darkThemeTintOpacity = 0.8f;
 static constexpr const D2D1_COLOR_F sc_lightThemeColor = { 0.953f, 0.953f, 0.953f, 1.0f };
 static constexpr const float sc_lightThemeTintOpacity = 0.5f;
 static constexpr const float sc_luminosityOpacity = 1.0f;
+static constexpr const float sc_blurRadius_mica = 60.0f;
 
 static constexpr const wchar_t WINDOW_CLASS_NAME[] = L"org.wangwenx190.D2DMica.WindowClass\0";
 static constexpr const wchar_t WINDOW_TITLE[] = L"Direct2D Mica Material\0";
@@ -125,11 +127,11 @@ static D3D_FEATURE_LEVEL g_D3DFeatureLevel = D3D_FEATURE_LEVEL_1_0_CORE;
     return (value == 0);
 }
 
-static inline void UpdateWindowFrame(const HWND hWnd)
+static inline void UpdateWindowTheme()
 {
     const BOOL dark = g_darkModeEnabled ? TRUE : FALSE;
-    DwmSetWindowAttribute(hWnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
-    SetWindowTheme(hWnd, (g_darkModeEnabled ? L"DarkMode_Explorer" : L"Explorer"), nullptr);
+    DwmSetWindowAttribute(g_hWnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+    SetWindowTheme(g_hWnd, (g_darkModeEnabled ? L"DarkMode_Explorer" : L"Explorer"), nullptr);
 }
 
 static inline void UpdateBrushAppearance()
@@ -145,12 +147,12 @@ static inline void UpdateBrushAppearance()
 {
     switch (uMsg) {
     case WM_PAINT: {
-        const int captionHeight = GetSystemMetricsForDpi(SM_CYCAPTION, g_dpi);
-        const int sizeFrameHeight = GetSystemMetricsForDpi(SM_CYSIZEFRAME, g_dpi);
         const int sizeFrameWidth = GetSystemMetricsForDpi(SM_CXSIZEFRAME, g_dpi);
+        const int sizeFrameHeight = GetSystemMetricsForDpi(SM_CYSIZEFRAME, g_dpi);
         const int paddedBorderWidth = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, g_dpi);
         const int resizeBorderWidth = sizeFrameWidth + paddedBorderWidth;
         const int resizeBorderHeight = sizeFrameHeight + paddedBorderWidth;
+        const int captionHeight = GetSystemMetricsForDpi(SM_CYCAPTION, g_dpi);
         const int titleBarHeight = captionHeight + resizeBorderHeight;
         RECT windowRect = {};
         GetWindowRect(hWnd, &windowRect);
@@ -159,7 +161,6 @@ static inline void UpdateBrushAppearance()
             float(windowRect.right - resizeBorderWidth), float(windowRect.bottom - resizeBorderHeight)
         };
         g_D2DContext->BeginDraw();
-        //g_D2DContext->Clear(g_darkModeEnabled ? D2D1_COLOR_F{0.0f, 0.0f, 0.0f, 1.0f} : D2D1_COLOR_F{1.0f, 1.0f, 1.0f, 1.0f});
         g_D2DContext->DrawImage(g_D2DFinalBrushEffect.Get(), nullptr, &rect, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
         g_D2DContext->EndDraw();
         DXGI_PRESENT_PARAMETERS params;
@@ -177,24 +178,36 @@ static inline void UpdateBrushAppearance()
             if (g_darkModeEnabled != dark) {
                 g_darkModeEnabled = dark;
                 UpdateBrushAppearance();
-                UpdateWindowFrame(hWnd);
+                UpdateWindowTheme();
+                std::wcout << L"The system theme has changed. Current theme: "
+                           << (g_darkModeEnabled ? L"dark" : L"light") << std::endl;
             }
         }
         if (wParam == SPI_SETDESKWALLPAPER) {
+            const std::wstring filePath = GetWallpaperFilePath();
+            if (g_wallpaperFilePath != filePath) {
+                g_wallpaperFilePath = filePath;
+                std::wcout << L"The desktop wallpaper has changed. Current wallpaper file path: "
+                           << g_wallpaperFilePath << std::endl;
+            }
         }
     } break;
     case WM_DPICHANGED: {
         const UINT dpiX = LOWORD(wParam);
         const UINT dpiY = HIWORD(wParam);
+        UNREFERENCED_PARAMETER(dpiY);
         if (g_dpi != dpiX) {
             g_dpi = dpiX;
             const auto rect = reinterpret_cast<LPRECT>(lParam);
             SetWindowPos(hWnd, nullptr, rect->left, rect->top, rect->right - rect->left,
                 rect->bottom - rect->top, SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+            std::wcout << L"The window DPI has changed. Current DPI: " << std::to_wstring(g_dpi) << std::endl;
             return 0;
         }
     } break;
     case WM_NCCALCSIZE: {
+        // Remember to call the default window procedure first, otherwise
+        // the window frame (including the title bar) will gone!
         DefWindowProcW(hWnd, WM_NCCALCSIZE, wParam, lParam);
         // Dirty hack to workaround the resize flicker caused by DWM.
         LARGE_INTEGER freq = {};
@@ -229,6 +242,7 @@ static inline void UpdateBrushAppearance()
         const double m_ms = (double(1000) * double(m) / double(freq.QuadPart));
         Sleep(DWORD(std::round(m_ms)));
         timeEndPeriod(ms_granularity);
+        // Return WVR_REDRAW can make the window resizing look less broken.
         return WVR_REDRAW;
     }
     case WM_WINDOWPOSCHANGING: {
@@ -237,10 +251,8 @@ static inline void UpdateBrushAppearance()
         const auto windowPos = reinterpret_cast<LPWINDOWPOS>(lParam);
         windowPos->flags |= SWP_NOCOPYBITS;
     } break;
-    case WM_WINDOWPOSCHANGED: {
-        RedrawWindow(hWnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOCHILDREN);
-    } break;
     case WM_ERASEBKGND: {
+        // Return non-zero to avoid flickering during window resizing.
         return 1;
     }
     case WM_CLOSE: {
@@ -272,6 +284,9 @@ EXTERN_C int WINAPI wWinMain
     g_darkModeEnabled = ShouldAppsUseDarkMode();
     g_wallpaperFilePath = GetWallpaperFilePath();
 
+    std::wcout << L"Current system theme: " << (g_darkModeEnabled ? L"dark" : L"light") << std::endl;
+    std::wcout << L"Current desktop wallpaper file path: " << g_wallpaperFilePath << std::endl;
+
     WNDCLASSEXW wcex;
     SecureZeroMemory(&wcex, sizeof(wcex));
     wcex.cbSize = sizeof(wcex);
@@ -288,7 +303,9 @@ EXTERN_C int WINAPI wWinMain
 
     g_dpi = GetDpiForWindow(g_hWnd);
 
-    UpdateWindowFrame(g_hWnd);
+    std::wcout << L"Current window DPI: " << std::to_wstring(g_dpi) << std::endl;
+
+    UpdateWindowTheme();
 
     D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_PPV_ARGS(g_D2DFactory.GetAddressOf()));
     // This array defines the set of DirectX hardware feature levels this app supports.
@@ -406,7 +423,7 @@ EXTERN_C int WINAPI wWinMain
     g_D2DNoiseBlendEffectOuter->SetInputEffect(1, g_D2DNoiseOpacityEffect.Get());
 
     //
-    g_D2DGaussianBlurEffect->SetValue(D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, sc_blurRadius);
+    g_D2DGaussianBlurEffect->SetValue(D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, sc_blurRadius_mica);
     g_D2DNoiseOpacityEffect->SetValue(D2D1_OPACITY_PROP_OPACITY, sc_noiseOpacity);
     UpdateBrushAppearance();
 
