@@ -37,18 +37,13 @@
 #include <iostream>
 #include "resource.h"
 
-static constexpr const D2D1_COLOR_F sc_defaultTintColor = { 1.0f, 1.0f, 1.0f, 0.8f };
-static constexpr const float sc_defaultTintOpacity = 1.0f;
-static constexpr const float sc_blurRadius = 30.0f;
+static constexpr const float sc_blurRadius = 80.0f;
 static constexpr const float sc_noiseOpacity = 0.02f;
-static constexpr const D2D1_COLOR_F sc_exclusionColor = { 1.0f, 1.0f, 1.0f, 0.1f };
-static constexpr const float sc_saturation = 1.25f;
 static constexpr const D2D1_COLOR_F sc_darkThemeColor = { 0.125f, 0.125f, 0.125f, 1.0f };
 static constexpr const float sc_darkThemeTintOpacity = 0.8f;
 static constexpr const D2D1_COLOR_F sc_lightThemeColor = { 0.953f, 0.953f, 0.953f, 1.0f };
 static constexpr const float sc_lightThemeTintOpacity = 0.5f;
 static constexpr const float sc_luminosityOpacity = 1.0f;
-static constexpr const float sc_blurRadius_mica = 60.0f;
 
 static constexpr const wchar_t WINDOW_CLASS_NAME[] = L"org.wangwenx190.D2DMica.WindowClass\0";
 static constexpr const wchar_t WINDOW_TITLE[] = L"Direct2D Mica Material\0";
@@ -134,6 +129,17 @@ static inline void UpdateWindowTheme()
     SetWindowTheme(g_hWnd, (g_darkModeEnabled ? L"DarkMode_Explorer" : L"Explorer"), nullptr);
 }
 
+static inline void UpdateWallpaperBitmap()
+{
+    g_WICFactory->CreateDecoderFromFilename(g_wallpaperFilePath.c_str(),
+        nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &g_WICWallpaperDecoder);
+    g_WICWallpaperDecoder->GetFrame(0, &g_WICWallpaperFrame);
+    g_WICFactory->CreateFormatConverter(&g_WICWallpaperConverter);
+    g_WICWallpaperConverter->Initialize(g_WICWallpaperFrame.Get(), GUID_WICPixelFormat32bppPBGRA,
+        WICBitmapDitherTypeNone, nullptr, 0.0f, WICBitmapPaletteTypeMedianCut);
+    g_D2DWallpaperBitmapSourceEffect->SetValue(D2D1_BITMAPSOURCE_PROP_WIC_BITMAP_SOURCE, g_WICWallpaperConverter.Get());
+}
+
 static inline void UpdateBrushAppearance()
 {
     g_D2DTintColorEffect->SetValue(D2D1_FLOOD_PROP_COLOR, (g_darkModeEnabled ? sc_darkThemeColor : sc_lightThemeColor));
@@ -187,6 +193,7 @@ static inline void UpdateBrushAppearance()
             const std::wstring filePath = GetWallpaperFilePath();
             if (g_wallpaperFilePath != filePath) {
                 g_wallpaperFilePath = filePath;
+                UpdateWallpaperBitmap();
                 std::wcout << L"The desktop wallpaper has changed. Current wallpaper file path: "
                            << g_wallpaperFilePath << std::endl;
             }
@@ -313,9 +320,9 @@ EXTERN_C int WINAPI wWinMain
     // Don't forget to declare your app's minimum required feature level in its
     // description. All apps are assumed to support 9.1 unless otherwise stated.
     static constexpr const D3D_FEATURE_LEVEL featureLevels[] = {
-        //D3D_FEATURE_LEVEL_12_2,
-        //D3D_FEATURE_LEVEL_12_1,
-        //D3D_FEATURE_LEVEL_12_0,
+        //D3D_FEATURE_LEVEL_12_2, // At least Windows 11.
+        D3D_FEATURE_LEVEL_12_1,
+        D3D_FEATURE_LEVEL_12_0,
         D3D_FEATURE_LEVEL_11_1
     };
     D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
@@ -352,14 +359,8 @@ EXTERN_C int WINAPI wWinMain
     CoCreateInstance(CLSID_WICImagingFactory2, nullptr,
         CLSCTX_INPROC_SERVER, IID_PPV_ARGS(g_WICFactory.GetAddressOf()));
 
-    g_WICFactory->CreateDecoderFromFilename(g_wallpaperFilePath.c_str(),
-        nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &g_WICWallpaperDecoder);
-    g_WICWallpaperDecoder->GetFrame(0, &g_WICWallpaperFrame);
-    g_WICFactory->CreateFormatConverter(&g_WICWallpaperConverter);
-    g_WICWallpaperConverter->Initialize(g_WICWallpaperFrame.Get(), GUID_WICPixelFormat32bppPBGRA,
-        WICBitmapDitherTypeNone, nullptr, 0.0f, WICBitmapPaletteTypeMedianCut);
     g_D2DContext->CreateEffect(CLSID_D2D1BitmapSource, g_D2DWallpaperBitmapSourceEffect.GetAddressOf());
-    g_D2DWallpaperBitmapSourceEffect->SetValue(D2D1_BITMAPSOURCE_PROP_WIC_BITMAP_SOURCE, g_WICWallpaperConverter.Get());
+    UpdateWallpaperBitmap();
 
     const HRSRC noiseResourceHandle = FindResourceW(g_hInstance, MAKEINTRESOURCEW(IDB_NOISE_BITMAP), L"PNG");
     const DWORD noiseResourceDataSize = SizeofResource(g_hInstance, noiseResourceHandle);
@@ -423,7 +424,7 @@ EXTERN_C int WINAPI wWinMain
     g_D2DNoiseBlendEffectOuter->SetInputEffect(1, g_D2DNoiseOpacityEffect.Get());
 
     //
-    g_D2DGaussianBlurEffect->SetValue(D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, sc_blurRadius_mica);
+    g_D2DGaussianBlurEffect->SetValue(D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, sc_blurRadius);
     g_D2DNoiseOpacityEffect->SetValue(D2D1_OPACITY_PROP_OPACITY, sc_noiseOpacity);
     UpdateBrushAppearance();
 
