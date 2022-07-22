@@ -208,7 +208,7 @@ static inline void UpdateBrushAppearance()
             const auto rect = reinterpret_cast<LPRECT>(lParam);
             SetWindowPos(hWnd, nullptr, rect->left, rect->top, rect->right - rect->left,
                 rect->bottom - rect->top, SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER);
-            std::wcout << L"The window DPI has changed. Current DPI: " << std::to_wstring(g_dpi) << std::endl;
+            std::wcout << L"The window DPI has changed. Current DPI: " << g_dpi << std::endl;
             return 0;
         }
     } break;
@@ -310,7 +310,7 @@ EXTERN_C int WINAPI wWinMain
 
     g_dpi = GetDpiForWindow(g_hWnd);
 
-    std::wcout << L"Current window DPI: " << std::to_wstring(g_dpi) << std::endl;
+    std::wcout << L"Current window DPI: " << g_dpi << std::endl;
 
     UpdateWindowTheme();
 
@@ -320,7 +320,7 @@ EXTERN_C int WINAPI wWinMain
     // Don't forget to declare your app's minimum required feature level in its
     // description. All apps are assumed to support 9.1 unless otherwise stated.
     static constexpr const D3D_FEATURE_LEVEL featureLevels[] = {
-        //D3D_FEATURE_LEVEL_12_2, // At least Windows 11.
+        //D3D_FEATURE_LEVEL_12_2, // Requires at least Windows 11.
         D3D_FEATURE_LEVEL_12_1,
         D3D_FEATURE_LEVEL_12_0,
         D3D_FEATURE_LEVEL_11_1
