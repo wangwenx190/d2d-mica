@@ -167,12 +167,12 @@ static inline void UpdateBrushAppearance()
             float(windowRect.right - resizeBorderWidth), float(windowRect.bottom - resizeBorderHeight)
         };
         g_D2DContext->BeginDraw();
-        g_D2DContext->DrawImage(g_D2DFinalBrushEffect.Get(), nullptr, &rect, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
+        g_D2DContext->DrawImage(g_D2DFinalBrushEffect.Get(), nullptr, &rect, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
         g_D2DContext->EndDraw();
         DXGI_PRESENT_PARAMETERS params;
         SecureZeroMemory(&params, sizeof(params));
         // Without this step, nothing will be visible to the user.
-        g_DXGISwapChain->Present1(1, 0, &params);
+        g_DXGISwapChain->Present1(0, DXGI_PRESENT_ALLOW_TEARING, &params);
         // Try to reduce flicker as much as possible.
         DwmFlush();
         return 0;
@@ -339,7 +339,8 @@ EXTERN_C int WINAPI wWinMain
     g_DXGISwapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     g_DXGISwapChainDesc.BufferCount = 2;
     g_DXGISwapChainDesc.Scaling = DXGI_SCALING_NONE;
-    g_DXGISwapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    g_DXGISwapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    g_DXGISwapChainDesc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
     g_DXGIDevice->GetAdapter(g_DXGIAdapter.GetAddressOf());
     g_DXGIAdapter->GetParent(IID_PPV_ARGS(g_DXGIFactory.GetAddressOf()));
     g_DXGIFactory->CreateSwapChainForHwnd(g_D3D11Device.Get(), g_hWnd,
@@ -383,7 +384,7 @@ EXTERN_C int WINAPI wWinMain
     g_D2DTintOpacityEffect->SetInputEffect(0, g_D2DTintColorEffect.Get());
     g_D2DContext->CreateEffect(CLSID_D2D1GaussianBlur, g_D2DGaussianBlurEffect.GetAddressOf());
     g_D2DGaussianBlurEffect->SetValue(D2D1_GAUSSIANBLUR_PROP_BORDER_MODE, D2D1_BORDER_MODE_HARD);
-    g_D2DGaussianBlurEffect->SetValue(D2D1_GAUSSIANBLUR_PROP_OPTIMIZATION, D2D1_DIRECTIONALBLUR_OPTIMIZATION_QUALITY);
+    g_D2DGaussianBlurEffect->SetValue(D2D1_GAUSSIANBLUR_PROP_OPTIMIZATION, D2D1_DIRECTIONALBLUR_OPTIMIZATION_SPEED);
     g_D2DGaussianBlurEffect->SetInputEffect(0, g_D2DWallpaperBitmapSourceEffect.Get());
 
     // Apply luminosity:
