@@ -23,6 +23,7 @@
  */
 
 #include <Windows.h>
+#include <windowsx.h>
 #include <dwmapi.h>
 #include <wrl\client.h>
 #include <dxgi1_2.h>
@@ -57,7 +58,6 @@ static LONG g_x1 = 0;
 static LONG g_x2 = 0;
 static LONG g_y1 = 0;
 static LONG g_y2 = 0;
-static bool g_forceUpdate = false;
 
 static Microsoft::WRL::ComPtr<ID2D1Factory2> g_D2DFactory = nullptr;
 static Microsoft::WRL::ComPtr<ID2D1Device1> g_D2DDevice = nullptr;
@@ -153,52 +153,59 @@ static inline void UpdateBrushAppearance()
     g_D2DLuminosityOpacityEffect->SetValue(D2D1_OPACITY_PROP_OPACITY, sc_luminosityOpacity);
 }
 
+static inline void D2DDraw(const bool force)
+{
+    if (!IsWindowVisible(g_hWnd) || IsMinimized(g_hWnd)) {
+        return;
+    }
+    const int sizeFrameWidth = GetSystemMetricsForDpi(SM_CXSIZEFRAME, g_dpi);
+    const int sizeFrameHeight = GetSystemMetricsForDpi(SM_CYSIZEFRAME, g_dpi);
+    const int paddedBorderWidth = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, g_dpi);
+    const int resizeBorderWidth = sizeFrameWidth + paddedBorderWidth;
+    const int resizeBorderHeight = sizeFrameHeight + paddedBorderWidth;
+    const int captionHeight = GetSystemMetricsForDpi(SM_CYCAPTION, g_dpi);
+    const int titleBarHeight = captionHeight + resizeBorderHeight;
+    RECT windowRect = {};
+    GetWindowRect(g_hWnd, &windowRect);
+    const LONG x1 = windowRect.left + resizeBorderWidth;
+    const LONG x2 = windowRect.right - resizeBorderWidth;
+    const LONG y1 = windowRect.top + titleBarHeight;
+    const LONG y2 = windowRect.bottom - resizeBorderHeight;
+    if (!force && (g_x1 == x1) && (g_x2 == x2) && (g_y1 == y1) && (g_y2 == y2)) {
+        return;
+    }
+    g_x1 = x1;
+    g_x2 = x2;
+    g_y1 = y1;
+    g_y2 = y2;
+    const D2D1_RECT_F rect = { float(g_x1), float(g_y1), float(g_x2), float(g_y2) };
+    g_D2DContext->BeginDraw();
+    g_D2DContext->DrawImage(g_D2DFinalBrushEffect.Get(), nullptr, &rect, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
+    g_D2DContext->EndDraw();
+    DXGI_PRESENT_PARAMETERS params;
+    SecureZeroMemory(&params, sizeof(params));
+    // Without this step, nothing will be visible to the user.
+    g_DXGISwapChain->Present1(0, DXGI_PRESENT_ALLOW_TEARING, &params);
+    // Try to reduce flicker as much as possible.
+    DwmFlush();
+}
+
 [[nodiscard]] static inline LRESULT CALLBACK WndProc
     (const HWND hWnd, const UINT uMsg, const WPARAM wParam, const LPARAM lParam)
 {
     switch (uMsg) {
-    case WM_PAINT: {
-        const int sizeFrameWidth = GetSystemMetricsForDpi(SM_CXSIZEFRAME, g_dpi);
-        const int sizeFrameHeight = GetSystemMetricsForDpi(SM_CYSIZEFRAME, g_dpi);
-        const int paddedBorderWidth = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, g_dpi);
-        const int resizeBorderWidth = sizeFrameWidth + paddedBorderWidth;
-        const int resizeBorderHeight = sizeFrameHeight + paddedBorderWidth;
-        const int captionHeight = GetSystemMetricsForDpi(SM_CYCAPTION, g_dpi);
-        const int titleBarHeight = captionHeight + resizeBorderHeight;
-        RECT windowRect = {};
-        GetWindowRect(hWnd, &windowRect);
-        const LONG x1 = windowRect.left + resizeBorderWidth;
-        const LONG x2 = windowRect.right - resizeBorderWidth;
-        const LONG y1 = windowRect.top + titleBarHeight;
-        const LONG y2 = windowRect.bottom - resizeBorderHeight;
-        if (g_forceUpdate || (g_x1 != x1) || (g_x2 != x2) || (g_y1 != y1) || (g_y2 != y2)) {
-            g_forceUpdate = false;
-            g_x1 = x1;
-            g_x2 = x2;
-            g_y1 = y1;
-            g_y2 = y2;
-            const D2D1_RECT_F rect = { float(g_x1), float(g_y1), float(g_x2), float(g_y2) };
-            g_D2DContext->BeginDraw();
-            g_D2DContext->DrawImage(g_D2DFinalBrushEffect.Get(), nullptr, &rect, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
-            g_D2DContext->EndDraw();
-            DXGI_PRESENT_PARAMETERS params;
-            SecureZeroMemory(&params, sizeof(params));
-            // Without this step, nothing will be visible to the user.
-            g_DXGISwapChain->Present1(0, DXGI_PRESENT_ALLOW_TEARING, &params);
-            // Try to reduce flicker as much as possible.
-            DwmFlush();
-        }
+    case WM_PAINT:
         return 0;
-    }
     case WM_SETTINGCHANGE: {
+        bool forceRedraw = false;
         if ((wParam == 0) && (lParam != 0) // lParam sometimes may be NULL.
             && (std::wcscmp(reinterpret_cast<LPCWSTR>(lParam), L"ImmersiveColorSet") == 0)) {
             const bool dark = ShouldAppsUseDarkMode();
             if (g_darkModeEnabled != dark) {
                 g_darkModeEnabled = dark;
-                g_forceUpdate = true;
-                UpdateBrushAppearance();
                 UpdateWindowTheme();
+                UpdateBrushAppearance();
+                forceRedraw = true;
                 std::wcout << L"The system theme has changed. Current theme: "
                            << (g_darkModeEnabled ? L"dark" : L"light") << std::endl;
             }
@@ -207,13 +214,19 @@ static inline void UpdateBrushAppearance()
             const std::wstring filePath = GetWallpaperFilePath();
             if (g_wallpaperFilePath != filePath) {
                 g_wallpaperFilePath = filePath;
-                g_forceUpdate = true;
                 UpdateWallpaperBitmap();
+                forceRedraw = true;
                 std::wcout << L"The desktop wallpaper has changed. Current wallpaper file path: "
                            << g_wallpaperFilePath << std::endl;
             }
         }
+        if (forceRedraw) {
+            D2DDraw(true);
+        }
     } break;
+    case WM_WINDOWPOSCHANGED:
+        D2DDraw(false);
+        break;
     case WM_DPICHANGED: {
         const UINT dpiX = LOWORD(wParam);
         const UINT dpiY = HIWORD(wParam);
@@ -272,10 +285,8 @@ static inline void UpdateBrushAppearance()
         const auto windowPos = reinterpret_cast<LPWINDOWPOS>(lParam);
         windowPos->flags |= SWP_NOCOPYBITS;
     } break;
-    case WM_ERASEBKGND: {
-        // Return non-zero to avoid flickering during window resizing.
-        return 1;
-    }
+    case WM_ERASEBKGND:
+        return 1; // Return non-zero to avoid flickering during window resizing.
     case WM_CLOSE: {
         DestroyWindow(hWnd);
         return 0;
