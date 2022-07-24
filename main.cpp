@@ -53,6 +53,11 @@ static HWND g_hWnd = nullptr;
 static UINT g_dpi = 0;
 static std::wstring g_wallpaperFilePath = {};
 static bool g_darkModeEnabled = false;
+static LONG g_x1 = 0;
+static LONG g_x2 = 0;
+static LONG g_y1 = 0;
+static LONG g_y2 = 0;
+static bool g_forceUpdate = false;
 
 static Microsoft::WRL::ComPtr<ID2D1Factory2> g_D2DFactory = nullptr;
 static Microsoft::WRL::ComPtr<ID2D1Device1> g_D2DDevice = nullptr;
@@ -162,19 +167,27 @@ static inline void UpdateBrushAppearance()
         const int titleBarHeight = captionHeight + resizeBorderHeight;
         RECT windowRect = {};
         GetWindowRect(hWnd, &windowRect);
-        const D2D1_RECT_F rect = {
-            float(windowRect.left + resizeBorderWidth), float(windowRect.top + titleBarHeight),
-            float(windowRect.right - resizeBorderWidth), float(windowRect.bottom - resizeBorderHeight)
-        };
-        g_D2DContext->BeginDraw();
-        g_D2DContext->DrawImage(g_D2DFinalBrushEffect.Get(), nullptr, &rect, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
-        g_D2DContext->EndDraw();
-        DXGI_PRESENT_PARAMETERS params;
-        SecureZeroMemory(&params, sizeof(params));
-        // Without this step, nothing will be visible to the user.
-        g_DXGISwapChain->Present1(0, DXGI_PRESENT_ALLOW_TEARING, &params);
-        // Try to reduce flicker as much as possible.
-        DwmFlush();
+        const LONG x1 = windowRect.left + resizeBorderWidth;
+        const LONG x2 = windowRect.right - resizeBorderWidth;
+        const LONG y1 = windowRect.top + titleBarHeight;
+        const LONG y2 = windowRect.bottom - resizeBorderHeight;
+        if (g_forceUpdate || (g_x1 != x1) || (g_x2 != x2) || (g_y1 != y1) || (g_y2 != y2)) {
+            g_forceUpdate = false;
+            g_x1 = x1;
+            g_x2 = x2;
+            g_y1 = y1;
+            g_y2 = y2;
+            const D2D1_RECT_F rect = { float(g_x1), float(g_y1), float(g_x2), float(g_y2) };
+            g_D2DContext->BeginDraw();
+            g_D2DContext->DrawImage(g_D2DFinalBrushEffect.Get(), nullptr, &rect, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
+            g_D2DContext->EndDraw();
+            DXGI_PRESENT_PARAMETERS params;
+            SecureZeroMemory(&params, sizeof(params));
+            // Without this step, nothing will be visible to the user.
+            g_DXGISwapChain->Present1(0, DXGI_PRESENT_ALLOW_TEARING, &params);
+            // Try to reduce flicker as much as possible.
+            DwmFlush();
+        }
         return 0;
     }
     case WM_SETTINGCHANGE: {
@@ -183,6 +196,7 @@ static inline void UpdateBrushAppearance()
             const bool dark = ShouldAppsUseDarkMode();
             if (g_darkModeEnabled != dark) {
                 g_darkModeEnabled = dark;
+                g_forceUpdate = true;
                 UpdateBrushAppearance();
                 UpdateWindowTheme();
                 std::wcout << L"The system theme has changed. Current theme: "
@@ -193,6 +207,7 @@ static inline void UpdateBrushAppearance()
             const std::wstring filePath = GetWallpaperFilePath();
             if (g_wallpaperFilePath != filePath) {
                 g_wallpaperFilePath = filePath;
+                g_forceUpdate = true;
                 UpdateWallpaperBitmap();
                 std::wcout << L"The desktop wallpaper has changed. Current wallpaper file path: "
                            << g_wallpaperFilePath << std::endl;
@@ -202,8 +217,7 @@ static inline void UpdateBrushAppearance()
     case WM_DPICHANGED: {
         const UINT dpiX = LOWORD(wParam);
         const UINT dpiY = HIWORD(wParam);
-        UNREFERENCED_PARAMETER(dpiY);
-        if (g_dpi != dpiX) {
+        if ((g_dpi != dpiX) || (g_dpi != dpiY)) {
             g_dpi = dpiX;
             const auto rect = reinterpret_cast<LPRECT>(lParam);
             SetWindowPos(hWnd, nullptr, rect->left, rect->top, rect->right - rect->left,
