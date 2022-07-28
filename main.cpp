@@ -31,7 +31,7 @@
 #include <d2d1_2.h>
 #include <d2d1effects_2.h>
 #include <wincodec.h>
-#include <mmsystem.h>
+#include <timeapi.h>
 #include <uxtheme.h>
 #include <clocale>
 #include <string>
